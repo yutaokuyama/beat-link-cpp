@@ -172,13 +172,13 @@ const std::unordered_map<uint8_t, Message::MenuIdentifier> Message::MENU_IDENTIF
     {8, MenuIdentifier::DATA}
 };
 
-Message::Message(int64_t transactionValue, int64_t messageTypeValue, std::vector<FieldPtr> args)
+Message::Message(std::int64_t transactionValue, std::int64_t messageTypeValue, std::vector<FieldPtr> args)
     : Message(NumberField(transactionValue, 4), NumberField(messageTypeValue, 2), std::move(args))
 {
 }
 
-Message::Message(int64_t transactionValue, KnownType type, std::vector<FieldPtr> args)
-    : Message(transactionValue, static_cast<int64_t>(static_cast<uint16_t>(type)), std::move(args))
+Message::Message(std::int64_t transactionValue, KnownType type, std::vector<FieldPtr> args)
+    : Message(transactionValue, static_cast<std::int64_t>(static_cast<uint16_t>(type)), std::move(args))
 {
 }
 
@@ -186,7 +186,7 @@ Message::Message(const NumberField& transactionField, const NumberField& message
                  std::vector<FieldPtr> args)
     : transaction(transactionField)
     , messageType(messageTypeField)
-    , argumentCount(NumberField(static_cast<int64_t>(args.size()), 1))
+    , argumentCount(NumberField(static_cast<std::int64_t>(args.size()), 1))
     , arguments(std::move(args))
 {
     if (transaction.getSize() != 4) {

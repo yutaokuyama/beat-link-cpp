@@ -92,6 +92,8 @@ public:
         ANLZ_TAG = 0x4f02
     };
 
+    // Avoid conflict with Windows API macro
+#undef COLOR_MENU
     enum class MenuItemType : uint32_t {
         FOLDER = 0x0001,
         ALBUM_TITLE = 0x0002,
@@ -189,7 +191,7 @@ public:
     static constexpr int ANLZ_FILE_TAG_3BAND_WAVEFORM_DETAIL = 0x37565750;
     static constexpr int ANLZ_FILE_TAG_SONG_STRUCTURE = 0x49535350;
     static constexpr int ANLZ_FILE_TAG_CUE_COMMENT = 0x324f4350;
-    static constexpr int64_t NO_MENU_RESULTS_AVAILABLE = 0xffffffffLL;
+    static constexpr std::int64_t NO_MENU_RESULTS_AVAILABLE = 0xffffffffLL;
 
     NumberField transaction;
     NumberField messageType;
@@ -198,8 +200,8 @@ public:
     std::vector<FieldPtr> arguments;
     std::vector<FieldPtr> fields;
 
-    Message(int64_t transaction, int64_t messageType, std::vector<FieldPtr> arguments = {});
-    Message(int64_t transaction, KnownType messageType, std::vector<FieldPtr> arguments = {});
+    Message(std::int64_t transaction, std::int64_t messageType, std::vector<FieldPtr> arguments = {});
+    Message(std::int64_t transaction, KnownType messageType, std::vector<FieldPtr> arguments = {});
     Message(const NumberField& transaction, const NumberField& messageType, std::vector<FieldPtr> arguments = {});
 
     static Message read(DataReader& reader);
