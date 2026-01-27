@@ -150,11 +150,13 @@ void ConnectionManager::closeIdleClients() {
 
 void ConnectionManager::requestPlayerDBServerPort(const beatlink::DeviceAnnouncement& announcement) {
     const auto addressKey = announcement.getAddress().to_uint();
-    
-    std::cerr << "[ConnectionManager DEBUG] requestPlayerDBServerPort for " 
-              << announcement.getDeviceName() << " #" << announcement.getDeviceNumber()
-              << " at " << announcement.getAddress().to_string() << std::endl;
-    
+
+    if (beatlink::isVerboseDebug()) {
+        std::cerr << "[ConnectionManager DEBUG] requestPlayerDBServerPort for "
+                  << announcement.getDeviceName() << " #" << announcement.getDeviceNumber()
+                  << " at " << announcement.getAddress().to_string() << std::endl;
+    }
+
     struct QueryGuard {
         std::mutex& mutex;
         std::unordered_map<uint32_t, bool>& map;
@@ -174,10 +176,12 @@ void ConnectionManager::requestPlayerDBServerPort(const beatlink::DeviceAnnounce
             asio::io_context io;
             asio::ip::tcp::socket socket(io);
             asio::ip::tcp::endpoint endpoint(announcement.getAddress(), DB_SERVER_QUERY_PORT);
-            
-            std::cerr << "[ConnectionManager DEBUG] Connecting to " << announcement.getAddress().to_string() 
-                      << ":" << DB_SERVER_QUERY_PORT << " (try " << (tries + 1) << ")..." << std::endl;
-            
+
+            if (beatlink::isVerboseDebug()) {
+                std::cerr << "[ConnectionManager DEBUG] Connecting to " << announcement.getAddress().to_string()
+                          << ":" << DB_SERVER_QUERY_PORT << " (try " << (tries + 1) << ")..." << std::endl;
+            }
+
             socket.connect(endpoint);
 
             asio::write(socket, asio::buffer(DB_SERVER_QUERY_PACKET.data(), DB_SERVER_QUERY_PACKET.size()));
@@ -187,21 +191,27 @@ void ConnectionManager::requestPlayerDBServerPort(const beatlink::DeviceAnnounce
             reader.readFully(response.data(), response.size());
 
             const int portReturned = static_cast<int>(beatlink::Util::bytesToNumber(response.data(), 0, 2));
-            
-            std::cerr << "[ConnectionManager DEBUG] Got port " << portReturned << " from " 
-                      << announcement.getAddress().to_string() << std::endl;
-            
+
+            if (beatlink::isVerboseDebug()) {
+                std::cerr << "[ConnectionManager DEBUG] Got port " << portReturned << " from "
+                          << announcement.getAddress().to_string() << std::endl;
+            }
+
             if (isRunning()) {
                 std::lock_guard<std::mutex> lock(dbServerMutex_);
                 dbServerPorts_[addressKey] = portReturned;
             }
             return;
         } catch (const std::exception& e) {
-            std::cerr << "[ConnectionManager DEBUG] Exception: " << e.what() << std::endl;
+            if (beatlink::isVerboseDebug()) {
+                std::cerr << "[ConnectionManager DEBUG] Exception: " << e.what() << std::endl;
+            }
             continue;
         }
     }
-    std::cerr << "[ConnectionManager DEBUG] Failed to get port after 4 tries" << std::endl;
+    if (beatlink::isVerboseDebug()) {
+        std::cerr << "[ConnectionManager DEBUG] Failed to get port after 4 tries" << std::endl;
+    }
 }
 
 int ConnectionManager::chooseAskingPlayerNumber(const beatlink::DeviceAnnouncement& targetPlayer) {

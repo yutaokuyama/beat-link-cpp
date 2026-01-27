@@ -1,4 +1,5 @@
 #include "beatlink/VirtualCdj.hpp"
+#include "beatlink/Util.hpp"
 
 #include "beatlink/BeatFinder.hpp"
 #include "beatlink/MediaDetails.hpp"
@@ -45,6 +46,14 @@ constexpr std::array<uint8_t, 0x26> kHelloBytes = {
     0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6d, 0x4a, 0x4f, 0x4c, 0x0a, 0x00, 0x62, 0x65, 0x61, 0x74,
     0x2d, 0x6c, 0x69, 0x6e, 0x6b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x01, 0x04, 0x00, 0x26, 0x01, 0x40
+};
+
+// DEVICE_KEEP_ALIVE (0x06) template, 54 bytes; must match Java keepAliveBytes for announcer send
+constexpr std::array<uint8_t, 0x36> kKeepAliveBytes = {
+    0x51, 0x73, 0x70, 0x74, 0x31, 0x57, 0x6d, 0x4a, 0x4f, 0x4c, 0x06, 0x00, 0x62, 0x65, 0x61, 0x74,
+    0x2d, 0x6c, 0x69, 0x6e, 0x6b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x02, 0x00, 0x36, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x02, 0x00, 0x00, 0x00, 0x01, 0x64
 };
 
 constexpr std::array<uint8_t, 0x2c> kClaimStage1 = {
@@ -374,7 +383,7 @@ VirtualCdj& VirtualCdj::getInstance() {
 }
 
 VirtualCdj::VirtualCdj() {
-    std::copy(kHelloBytes.begin(), kHelloBytes.end(), keepAliveBytes_.begin());
+    std::copy(kKeepAliveBytes.begin(), kKeepAliveBytes.end(), keepAliveBytes_.begin());
     setDeviceName(deviceName_);
 
     deviceFinderLifecycleListener_ = std::make_shared<LifecycleCallbacks>(
@@ -596,6 +605,11 @@ bool VirtualCdj::start() {
     localAddress_.store(localAddress.to_uint());
     auto broadcast = findBroadcastAddress(localAddress).value_or(asio::ip::address_v4::broadcast());
     broadcastAddress_.store(broadcast.to_uint());
+
+    // (Re)init keep-alive template and device name so announcer sends DEVICE_KEEP_ALIVE (0x06) like Java
+    std::copy(kKeepAliveBytes.begin(), kKeepAliveBytes.end(), keepAliveBytes_.begin());
+    std::fill(keepAliveBytes_.begin() + kDeviceNameOffset, keepAliveBytes_.begin() + kDeviceNameOffset + kDeviceNameLength, 0);
+    std::memcpy(keepAliveBytes_.data() + kDeviceNameOffset, deviceName_.data(), std::min(deviceName_.size(), kDeviceNameLength));
 
     std::array<uint8_t, 6> mac{};
     if (fillMacAddress(localAddress, mac)) {
@@ -1361,42 +1375,49 @@ void VirtualCdj::receiverLoop() {
             if (ec == asio::error::would_block) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 
-                // DEBUG: Log packet count every 5 seconds
-                auto now = std::chrono::steady_clock::now();
-                if (std::chrono::duration_cast<std::chrono::seconds>(now - lastLogTime).count() >= 5) {
-                    std::cerr << "[VirtualCdj DEBUG] Packets received in last 5s: " << (packetCount - lastLoggedCount) 
-                              << " (total: " << packetCount << ")" << std::endl;
-                    lastLoggedCount = packetCount;
-                    lastLogTime = now;
+                // DEBUG: Log packet count every 5 seconds (only when verbose debug is on)
+                if (isVerboseDebug()) {
+                    auto now = std::chrono::steady_clock::now();
+                    if (std::chrono::duration_cast<std::chrono::seconds>(now - lastLogTime).count() >= 5) {
+                        std::cerr << "[VirtualCdj DEBUG] Packets received in last 5s: " << (packetCount - lastLoggedCount)
+                                  << " (total: " << packetCount << ")" << std::endl;
+                        lastLoggedCount = packetCount;
+                        lastLogTime = now;
+                    }
                 }
                 continue;
             }
             if (ec) {
-                std::cerr << "[VirtualCdj DEBUG] Receive error: " << ec.message() << std::endl;
+                if (isVerboseDebug()) {
+                    std::cerr << "[VirtualCdj DEBUG] Receive error: " << ec.message() << std::endl;
+                }
                 continue;
             }
             
             packetCount++;
             
-            // DEBUG: Log received packet info
-            std::cerr << "[VirtualCdj DEBUG] Received " << length << " bytes from " 
-                      << senderEndpoint.address().to_string() << ":" << senderEndpoint.port() << std::endl;
-            
             auto type = Util::validateHeader(std::span<const uint8_t>(buffer.data(), length), Ports::UPDATE);
             if (!type) {
-                // DEBUG: Show first 16 bytes of failed packet
-                std::cerr << "[VirtualCdj DEBUG] validateHeader failed, first bytes (hex): ";
-                char hexbuf[4];
-                for (size_t i = 0; i < std::min(length, size_t(16)); ++i) {
-                    snprintf(hexbuf, sizeof(hexbuf), "%02x ", buffer[i]);
-                    std::cerr << hexbuf;
+                if (isVerboseDebug()) {
+                    std::cerr << "[VirtualCdj DEBUG] validateHeader failed, first bytes (hex): ";
+                    char hexbuf[4];
+                    for (size_t i = 0; i < std::min(length, size_t(16)); ++i) {
+                        snprintf(hexbuf, sizeof(hexbuf), "%02x ", buffer[i]);
+                        std::cerr << hexbuf;
+                    }
+                    std::cerr << std::endl;
                 }
-                std::cerr << std::endl;
+                continue;
+            }
+            // 38-byte packets from CDJ-3000/NXS (type 0x40) — skip without logging to avoid log flood
+            if (*type == PacketType::DEVICE_INFO_0x40) {
                 continue;
             }
             
-            std::cerr << "[VirtualCdj DEBUG] Valid packet type: 0x" << std::hex << static_cast<int>(*type) 
-                      << std::dec << " from " << senderEndpoint.address().to_string() << std::endl;
+            if (isVerboseDebug()) {
+                std::cerr << "[VirtualCdj DEBUG] Received " << length << " bytes, type 0x" << std::hex << static_cast<int>(*type)
+                          << std::dec << " from " << senderEndpoint.address().to_string() << std::endl;
+            }
             if (*type == PacketType::MEDIA_RESPONSE) {
                 try {
                     MediaDetails details(buffer.data(), length);
@@ -1429,17 +1450,19 @@ void VirtualCdj::sendAnnouncement() {
     asio::error_code ec;
     socket_->send_to(asio::buffer(keepAliveBytes_), target, 0, ec);
     
-    // DEBUG: Log keep-alive every 10 seconds
-    static int announceCount = 0;
-    static auto lastAnnounceLog = std::chrono::steady_clock::now();
-    announceCount++;
-    auto now = std::chrono::steady_clock::now();
-    if (std::chrono::duration_cast<std::chrono::seconds>(now - lastAnnounceLog).count() >= 10) {
-        std::cerr << "[VirtualCdj DEBUG] Keep-alive sent to " << target.address().to_string() << ":" << target.port()
-                  << " | Device#" << (int)getDeviceNumber()
-                  << " | Local: " << asio::ip::address_v4(localAddress_.load()).to_string()
-                  << " | Count: " << announceCount << std::endl;
-        lastAnnounceLog = now;
+    // DEBUG: Log keep-alive every 10 seconds (only when verbose debug is on)
+    if (isVerboseDebug()) {
+        static int announceCount = 0;
+        static auto lastAnnounceLog = std::chrono::steady_clock::now();
+        announceCount++;
+        auto now = std::chrono::steady_clock::now();
+        if (std::chrono::duration_cast<std::chrono::seconds>(now - lastAnnounceLog).count() >= 10) {
+            std::cerr << "[VirtualCdj DEBUG] Keep-alive sent to " << target.address().to_string() << ":" << target.port()
+                      << " | Device#" << (int)getDeviceNumber()
+                      << " | Local: " << asio::ip::address_v4(localAddress_.load()).to_string()
+                      << " | Count: " << announceCount << std::endl;
+            lastAnnounceLog = now;
+        }
     }
     
     std::this_thread::sleep_for(std::chrono::milliseconds(announceInterval_.load()));
@@ -1626,6 +1649,18 @@ bool VirtualCdj::selfAssignDeviceNumber() {
 
 bool VirtualCdj::claimDeviceNumber() {
     claimRejected_.store(false);
+    mixerAssigned_.store(0);
+
+    // Send the initial series of three "coming online" packets (match Java lines 782-796).
+    std::array<uint8_t, kHelloBytes.size()> hello = kHelloBytes;
+    std::fill(hello.begin() + kDeviceNameOffset, hello.begin() + kDeviceNameOffset + kDeviceNameLength, 0);
+    std::memcpy(hello.data() + kDeviceNameOffset, deviceName_.data(), std::min(deviceName_.size(), kDeviceNameLength));
+    const asio::ip::address_v4 broadcastAddr(broadcastAddress_.load());
+    for (int i = 1; i <= 3; ++i) {
+        sendRawPacket(hello, broadcastAddr, Ports::ANNOUNCEMENT);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
+
     int desired = getDeviceNumber();
     if (desired == 0) {
         if (!selfAssignDeviceNumber()) {
@@ -1724,6 +1759,7 @@ bool VirtualCdj::claimDeviceNumber() {
 
     keepAliveBytes_[kDeviceNumberOffset] = static_cast<uint8_t>(claimingNumber_.load());
     claimingNumber_.store(0);
+    mixerAssigned_.store(0);
     return true;
 }
 
