@@ -23,6 +23,11 @@
 #else
 #include <netpacket/packet.h>
 #endif
+#elif defined(_WIN32)
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <iphlpapi.h>
+#pragma comment(lib, "iphlpapi.lib")
 #endif
 
 namespace beatlink {
@@ -267,6 +272,34 @@ std::optional<asio::ip::address_v4> findBroadcastAddress(asio::ip::address_v4 lo
         }
     }
     freeifaddrs(ifaddr);
+#elif defined(_WIN32)
+    // Windows implementation using GetAdaptersAddresses
+    ULONG size = 0;
+    GetAdaptersAddresses(AF_INET, 0, nullptr, nullptr, &size);
+    if (size == 0) {
+        return std::nullopt;
+    }
+    std::vector<uint8_t> buffer(size);
+    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+    if (GetAdaptersAddresses(AF_INET, 0, nullptr, adapters, &size) != NO_ERROR) {
+        return std::nullopt;
+    }
+    for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
+        for (auto* unicast = adapter->FirstUnicastAddress; unicast; unicast = unicast->Next) {
+            if (unicast->Address.lpSockaddr->sa_family != AF_INET) {
+                continue;
+            }
+            auto* addr = reinterpret_cast<sockaddr_in*>(unicast->Address.lpSockaddr);
+            uint32_t addrHost = ntohl(addr->sin_addr.s_addr);
+            if (addrHost == localAddress.to_uint()) {
+                // Calculate broadcast from prefix length
+                uint8_t prefixLen = unicast->OnLinkPrefixLength;
+                uint32_t mask = (prefixLen == 0) ? 0 : (~0u << (32 - prefixLen));
+                uint32_t broadcastHost = addrHost | ~mask;
+                return asio::ip::address_v4(broadcastHost);
+            }
+        }
+    }
 #endif
     return std::nullopt;
 }
@@ -579,6 +612,8 @@ bool VirtualCdj::start() {
     socket_->set_option(asio::socket_base::reuse_address(true));
     socket_->set_option(asio::socket_base::broadcast(true));
     socket_->bind(asio::ip::udp::endpoint(localAddress, Ports::UPDATE));
+    std::cerr << "[VirtualCdj] Socket bound to " << localAddress.to_string()
+              << ":" << Ports::UPDATE << std::endl;
 
     DeviceFinder::getInstance().addIgnoredAddress(localAddress);
 
@@ -592,8 +627,10 @@ bool VirtualCdj::start() {
 
     running_.store(true);
 
+    std::cerr << "[VirtualCdj] Starting receiver thread on port 50002..." << std::endl;
     receiverThread_ = std::thread(&VirtualCdj::receiverLoop, this);
     announcerThread_ = std::thread(&VirtualCdj::announcerLoop, this);
+    std::cerr << "[VirtualCdj] Threads started successfully" << std::endl;
 
     starting_.store(false);
     deliverLifecycleAnnouncement(true);
@@ -1310,6 +1347,10 @@ void VirtualCdj::handleSpecialAnnouncementPacket(PacketType kind,
 }
 
 void VirtualCdj::receiverLoop() {
+    static int packetCount = 0;
+    static int lastLoggedCount = 0;
+    static auto lastLogTime = std::chrono::steady_clock::now();
+    
     while (running_.load()) {
         try {
             socket_->non_blocking(true);
@@ -1319,15 +1360,43 @@ void VirtualCdj::receiverLoop() {
             size_t length = socket_->receive_from(asio::buffer(buffer), senderEndpoint, 0, ec);
             if (ec == asio::error::would_block) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                
+                // DEBUG: Log packet count every 5 seconds
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::seconds>(now - lastLogTime).count() >= 5) {
+                    std::cerr << "[VirtualCdj DEBUG] Packets received in last 5s: " << (packetCount - lastLoggedCount) 
+                              << " (total: " << packetCount << ")" << std::endl;
+                    lastLoggedCount = packetCount;
+                    lastLogTime = now;
+                }
                 continue;
             }
             if (ec) {
+                std::cerr << "[VirtualCdj DEBUG] Receive error: " << ec.message() << std::endl;
                 continue;
             }
+            
+            packetCount++;
+            
+            // DEBUG: Log received packet info
+            std::cerr << "[VirtualCdj DEBUG] Received " << length << " bytes from " 
+                      << senderEndpoint.address().to_string() << ":" << senderEndpoint.port() << std::endl;
+            
             auto type = Util::validateHeader(std::span<const uint8_t>(buffer.data(), length), Ports::UPDATE);
             if (!type) {
+                // DEBUG: Show first 16 bytes of failed packet
+                std::cerr << "[VirtualCdj DEBUG] validateHeader failed, first bytes (hex): ";
+                char hexbuf[4];
+                for (size_t i = 0; i < std::min(length, size_t(16)); ++i) {
+                    snprintf(hexbuf, sizeof(hexbuf), "%02x ", buffer[i]);
+                    std::cerr << hexbuf;
+                }
+                std::cerr << std::endl;
                 continue;
             }
+            
+            std::cerr << "[VirtualCdj DEBUG] Valid packet type: 0x" << std::hex << static_cast<int>(*type) 
+                      << std::dec << " from " << senderEndpoint.address().to_string() << std::endl;
             if (*type == PacketType::MEDIA_RESPONSE) {
                 try {
                     MediaDetails details(buffer.data(), length);
@@ -1359,6 +1428,20 @@ void VirtualCdj::sendAnnouncement() {
     asio::ip::udp::endpoint target(asio::ip::address_v4(broadcastAddress_.load()), Ports::ANNOUNCEMENT);
     asio::error_code ec;
     socket_->send_to(asio::buffer(keepAliveBytes_), target, 0, ec);
+    
+    // DEBUG: Log keep-alive every 10 seconds
+    static int announceCount = 0;
+    static auto lastAnnounceLog = std::chrono::steady_clock::now();
+    announceCount++;
+    auto now = std::chrono::steady_clock::now();
+    if (std::chrono::duration_cast<std::chrono::seconds>(now - lastAnnounceLog).count() >= 10) {
+        std::cerr << "[VirtualCdj DEBUG] Keep-alive sent to " << target.address().to_string() << ":" << target.port()
+                  << " | Device#" << (int)getDeviceNumber()
+                  << " | Local: " << asio::ip::address_v4(localAddress_.load()).to_string()
+                  << " | Count: " << announceCount << std::endl;
+        lastAnnounceLog = now;
+    }
+    
     std::this_thread::sleep_for(std::chrono::milliseconds(announceInterval_.load()));
 }
 
