@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <array>
 #include <vector>
@@ -50,6 +51,20 @@ struct LogEntry {
         return oss.str();
     }
 };
+
+// ============================================================================
+// Verbose debug control
+// ============================================================================
+
+/** When true, VirtualCdj and ConnectionManager emit per-packet/per-connection DEBUG lines to stderr. Default false. */
+namespace detail {
+inline std::atomic<bool>& verboseDebugFlag() noexcept {
+    static std::atomic<bool> flag{false};
+    return flag;
+}
+}
+inline void setVerboseDebug(bool on) noexcept { detail::verboseDebugFlag().store(on, std::memory_order_relaxed); }
+inline bool isVerboseDebug() noexcept { return detail::verboseDebugFlag().load(std::memory_order_relaxed); }
 
 // ============================================================================
 // Utility Functions
@@ -237,7 +252,15 @@ public:
             return std::nullopt;
         }
 
-        auto type = PacketTypes::lookup(port, data[PACKET_TYPE_OFFSET]);
+        const uint8_t typeByte = data[PACKET_TYPE_OFFSET];
+        // Match Java: on UPDATE port (50002), same protocol values as ANNOUNCEMENT (50000) map to different types
+        if (port == Ports::UPDATE && typeByte == static_cast<uint8_t>(PacketType::CDJ_STATUS)) {
+            return PacketType::CDJ_STATUS;   // 0x0a on 50002
+        }
+        if (port == Ports::UPDATE && typeByte == static_cast<uint8_t>(PacketType::MEDIA_RESPONSE)) {
+            return PacketType::MEDIA_RESPONSE;  // 0x06 on 50002 (0x06 on 50000 is DEVICE_KEEP_ALIVE)
+        }
+        auto type = PacketTypes::lookup(port, typeByte);
         return type;
     }
 

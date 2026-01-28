@@ -251,7 +251,9 @@ std::vector<DeviceAnnouncement> DeviceFinder::getCurrentDevices() {
 }
 
 bool DeviceFinder::isDeviceMetadataLimited(const DeviceAnnouncement& announcement) const {
-    static const std::unordered_set<std::string> kMetadataFlexibleDevices = {"CDJ-3000", "XDJ-AZ"};
+    static const std::unordered_set<std::string> kMetadataFlexibleDevices = {
+        "CDJ-3000", "CDJ-3000X", "XDJ-AZ"
+    };
     return announcement.getDeviceNumber() < 7 &&
            kMetadataFlexibleDevices.find(announcement.getDeviceName()) == kMetadataFlexibleDevices.end();
 }

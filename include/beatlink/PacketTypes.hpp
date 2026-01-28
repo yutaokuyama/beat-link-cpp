@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -56,6 +57,7 @@ enum class PacketType : uint8_t {
     MEDIA_QUERY = 0x05,             // Ask player about mounted media
     MEDIA_RESPONSE = 0x06,          // Response to media query
     CDJ_STATUS = 0x0a,              // Detailed CDJ status
+    DEVICE_INFO_0x40 = 0x40,        // 38-byte packets from CDJ-3000/NXS (e.g. "@NXS-G"), ignored
     DEVICE_REKORDBOX_LIGHTING_HELLO = 0x10, // Opus Quad lighting hello
     LOAD_TRACK_COMMAND = 0x19,      // Load track command
     LOAD_TRACK_ACK = 0x1a,          // Load track acknowledgment
@@ -110,6 +112,7 @@ public:
             {PacketType::MIXER_STATUS, {PacketType::MIXER_STATUS, "Mixer Status", Ports::UPDATE}},
             {PacketType::LOAD_SETTINGS_COMMAND, {PacketType::LOAD_SETTINGS_COMMAND, "Load Settings Command", Ports::UPDATE}},
             {PacketType::OPUS_METADATA, {PacketType::OPUS_METADATA, "OPUS Metadata", Ports::UPDATE}},
+            {PacketType::DEVICE_INFO_0x40, {PacketType::DEVICE_INFO_0x40, "Device Info 0x40 (38-byte, ignore)", Ports::UPDATE}},
         };
 
         auto it = info.find(type);
@@ -121,15 +124,43 @@ public:
 
     /**
      * Look up a packet type by port and protocol value.
+     * Uses explicit iteration over all PacketType values so that duplicate protocol values
+     * on different ports (e.g. 0x0a = DEVICE_HELLO on 50000, CDJ_STATUS on 50002) are both registered.
      */
     static std::optional<PacketType> lookup(uint16_t port, uint8_t protocolValue) {
         static bool initialized = false;
         static std::unordered_map<uint16_t, std::unordered_map<uint8_t, PacketType>> portMap;
 
         if (!initialized) {
-            // Build the port map from packet info
-            for (int i = 0; i <= 0xff; ++i) {
-                auto pt = static_cast<PacketType>(i);
+            static const std::array<PacketType, 26> kAllTypes = {
+                PacketType::FADER_START_COMMAND,
+                PacketType::CHANNELS_ON_AIR,
+                PacketType::PRECISE_POSITION,
+                PacketType::MASTER_HANDOFF_REQUEST,
+                PacketType::MASTER_HANDOFF_RESPONSE,
+                PacketType::BEAT,
+                PacketType::SYNC_CONTROL,
+                PacketType::DEVICE_NUMBER_STAGE_1,
+                PacketType::DEVICE_NUMBER_WILL_ASSIGN,
+                PacketType::DEVICE_NUMBER_STAGE_2,
+                PacketType::DEVICE_NUMBER_ASSIGN,
+                PacketType::DEVICE_NUMBER_STAGE_3,
+                PacketType::DEVICE_NUMBER_ASSIGNMENT_FINISHED,
+                PacketType::DEVICE_KEEP_ALIVE,
+                PacketType::DEVICE_NUMBER_IN_USE,
+                PacketType::DEVICE_HELLO,
+                PacketType::MEDIA_QUERY,
+                PacketType::MEDIA_RESPONSE,
+                PacketType::CDJ_STATUS,
+                PacketType::DEVICE_INFO_0x40,
+                PacketType::DEVICE_REKORDBOX_LIGHTING_HELLO,
+                PacketType::LOAD_TRACK_COMMAND,
+                PacketType::LOAD_TRACK_ACK,
+                PacketType::MIXER_STATUS,
+                PacketType::LOAD_SETTINGS_COMMAND,
+                PacketType::OPUS_METADATA,
+            };
+            for (PacketType pt : kAllTypes) {
                 auto info = getInfo(pt);
                 if (info) {
                     portMap[info->port][static_cast<uint8_t>(pt)] = pt;

@@ -51,7 +51,7 @@ public:
     /**
      * Check if a floating-point value is safe (not NaN or Inf).
      */
-    [[nodiscard]] static constexpr bool isSafe(double value) noexcept {
+    [[nodiscard]] static inline bool isSafe(double value) noexcept {
         return std::isfinite(value);
     }
 
@@ -59,7 +59,7 @@ public:
      * Clamp a value to a range, handling NaN/Inf by returning a default.
      * This is the core safety function.
      */
-    [[nodiscard]] static constexpr double clampSafe(
+    [[nodiscard]] static inline double clampSafe(
         double value,
         double min_val,
         double max_val,
@@ -75,7 +75,7 @@ public:
      * Sanitize a BPM value.
      * Returns a safe BPM value, defaulting to 120 if input is invalid.
      */
-    [[nodiscard]] static constexpr double sanitizeBpm(double bpm) noexcept {
+    [[nodiscard]] static inline double sanitizeBpm(double bpm) noexcept {
         constexpr double DEFAULT_BPM = 120.0;
         return clampSafe(bpm, SafetyLimits::MIN_BPM, SafetyLimits::MAX_BPM, DEFAULT_BPM);
     }
@@ -84,9 +84,9 @@ public:
      * Sanitize a pitch percentage value.
      * Returns a safe pitch, defaulting to 0% (neutral) if input is invalid.
      */
-    [[nodiscard]] static constexpr double sanitizePitchPercent(double pitch) noexcept {
-        constexpr double DEFAULT_PITCH = 0.0;
-        return clampSafe(pitch, SafetyLimits::MIN_PITCH_PERCENT, SafetyLimits::MAX_PITCH_PERCENT, DEFAULT_PITCH);
+    [[nodiscard]] static inline double sanitizePitchPercent(double pitch) noexcept {
+        constexpr double DEFAULT_PITCH_VALUE = 0.0;
+        return clampSafe(pitch, SafetyLimits::MIN_PITCH_PERCENT, SafetyLimits::MAX_PITCH_PERCENT, DEFAULT_PITCH_VALUE);
     }
 
     /**
